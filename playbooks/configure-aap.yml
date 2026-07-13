@@ -129,6 +129,7 @@
         metadata:
           public_key: "{{ vault_ssh_public_key }}"
           secret_path: "{{ ssh_mount_path }}"
+          default_auth_path: "{{ jwt_auth_path }}"
           role: "{{ ssh_role_name }}"
           valid_principals: "{{ ssh_default_user }}"
         state: present
