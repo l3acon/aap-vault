@@ -92,8 +92,6 @@
         <<: *controller_auth
         name: "{{ ec2_host_ip }}"
         inventory: "{{ aap_inventory_name }}"
-        variables:
-          ansible_user: ec2-user
         state: present
 
     # --- Credentials ---
