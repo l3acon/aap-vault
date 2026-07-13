@@ -1,0 +1,98 @@
+---
+# Bootstrap a host to trust a BU-specific Vault SSH CA.
+#
+# This playbook is designed to run as an AAP job template during
+# host provisioning (or via cloud-init user-data calling ansible-pull).
+#
+# Variables:
+#   bu_name: Business unit name (e.g., bu-finance)
+#   vault_ca_public_key: The CA public key (passed from Vault or file)
+#   ssh_principals: Dict mapping local users to allowed principals
+
+- name: Bootstrap host for Vault SSH CA trust
+  hosts: all
+  become: true
+  gather_facts: true
+
+  vars:
+    bu_name: "{{ bu_name | default('bu-finance') }}"
+    ca_key_path: /etc/ssh/trusted-user-ca-keys.pem
+    principals_dir: /etc/ssh/auth_principals
+
+    ssh_principals:
+      deploy:
+        - deploy
+        - automation
+      ec2-user:
+        - deploy
+        - ec2-user
+      admin:
+        - admin
+
+  tasks:
+    - name: Install Vault CA public key
+      ansible.builtin.copy:
+        content: "{{ vault_ca_public_key }}"
+        dest: "{{ ca_key_path }}"
+        mode: "0644"
+        owner: root
+        group: root
+
+    - name: Create principals directory
+      ansible.builtin.file:
+        path: "{{ principals_dir }}"
+        state: directory
+        mode: "0755"
+        owner: root
+        group: root
+
+    - name: Create principals files for each user
+      ansible.builtin.copy:
+        content: "{{ item.value | join('\n') }}\n"
+        dest: "{{ principals_dir }}/{{ item.key }}"
+        mode: "0644"
+        owner: root
+        group: root
+      loop: "{{ ssh_principals | dict2items }}"
+      loop_control:
+        label: "{{ item.key }}"
+
+    - name: Configure sshd for Vault CA trust
+      ansible.builtin.blockinfile:
+        path: /etc/ssh/sshd_config
+        marker: "# {mark} VAULT SSH CA CONFIGURATION"
+        block: |
+          TrustedUserCAKeys {{ ca_key_path }}
+          AuthorizedPrincipalsFile {{ principals_dir }}/%u
+          PasswordAuthentication no
+      notify: Validate and restart sshd
+
+    - name: Ensure SSH authorized_keys is not used for cert users
+      ansible.builtin.file:
+        path: "/home/{{ item.key }}/.ssh/authorized_keys"
+        state: absent
+      loop: "{{ ssh_principals | dict2items }}"
+      loop_control:
+        label: "{{ item.key }}"
+      failed_when: false
+
+    - name: Add host metadata tag
+      ansible.builtin.copy:
+        content: |
+          bu={{ bu_name }}
+          ca_configured=true
+          ca_key_path={{ ca_key_path }}
+        dest: /etc/vault-ssh-ca.conf
+        mode: "0644"
+
+  handlers:
+    - name: Validate and restart sshd
+      block:
+        - name: Validate sshd config
+          ansible.builtin.command: sshd -t
+          changed_when: false
+
+        - name: Restart sshd
+          ansible.builtin.systemd:
+            name: sshd
+            state: restarted

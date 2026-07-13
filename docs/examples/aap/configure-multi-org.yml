@@ -1,0 +1,132 @@
+---
+# Configure AAP 2.7 multi-organization structure for enterprise zero-trust.
+#
+# Creates one AAP organization per business unit, each with:
+#   - Vault OIDC credential scoped to its Vault namespace
+#   - Teams mapped from Entra ID groups
+#   - Inventories per environment
+#
+# Requires: ansible.controller collection, AAP 2.7 gateway OAuth token
+#
+# Usage:
+#   ansible-playbook configure-multi-org.yml \
+#     -e aap_hostname=https://aap.example.com \
+#     -e aap_token=<oauth-token> \
+#     -e vault_url=https://vault.example.com:8200
+
+- name: Configure AAP multi-org structure
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  vars:
+    aap_hostname: "{{ aap_hostname }}"
+    aap_token: "{{ aap_token }}"
+    vault_url: "{{ vault_url }}"
+    jwt_role_name: aap-workload-role
+    jwt_auth_path: jwt
+
+    business_units:
+      - name: BU-Finance
+        vault_namespace: bu-finance
+        teams:
+          - Payments-Dev
+          - Risk-Ops
+          - Finance-Admin
+        inventories:
+          - Finance-Prod
+          - Finance-Staging
+
+      - name: BU-Engineering
+        vault_namespace: bu-engineering
+        teams:
+          - Platform
+          - App-Dev
+          - SRE
+        inventories:
+          - Eng-Prod
+          - Eng-Dev
+
+      - name: BU-Operations
+        vault_namespace: bu-operations
+        teams:
+          - NOC
+          - Cloud-Ops
+        inventories:
+          - Ops-Prod
+          - Ops-Dev
+
+  tasks:
+    - name: Create organizations
+      ansible.controller.organization:
+        controller_host: "{{ aap_hostname }}"
+        controller_oauthtoken: "{{ aap_token }}"
+        validate_certs: true
+        name: "{{ item.name }}"
+        state: present
+      loop: "{{ business_units }}"
+      loop_control:
+        label: "{{ item.name }}"
+
+    - name: Create teams
+      ansible.controller.team:
+        controller_host: "{{ aap_hostname }}"
+        controller_oauthtoken: "{{ aap_token }}"
+        validate_certs: true
+        name: "{{ item.1 }}"
+        organization: "{{ item.0.name }}"
+        state: present
+      loop: "{{ business_units | subelements('teams') }}"
+      loop_control:
+        label: "{{ item.0.name }}/{{ item.1 }}"
+
+    - name: Create inventories
+      ansible.controller.inventory:
+        controller_host: "{{ aap_hostname }}"
+        controller_oauthtoken: "{{ aap_token }}"
+        validate_certs: true
+        name: "{{ item.1 }}"
+        organization: "{{ item.0.name }}"
+        state: present
+      loop: "{{ business_units | subelements('inventories') }}"
+      loop_control:
+        label: "{{ item.0.name }}/{{ item.1 }}"
+
+    - name: Create Vault OIDC credential per organization
+      ansible.controller.credential:
+        controller_host: "{{ aap_hostname }}"
+        controller_oauthtoken: "{{ aap_token }}"
+        validate_certs: true
+        name: "Vault SSH OIDC - {{ item.name }}"
+        organization: "{{ item.name }}"
+        credential_type: "HashiCorp Vault Signed SSH (OIDC)"
+        inputs:
+          url: "{{ vault_url }}"
+          default_auth_path: "{{ jwt_auth_path }}"
+          jwt_role: "{{ jwt_role_name }}"
+          namespace: "{{ item.vault_namespace }}"
+        state: present
+      loop: "{{ business_units }}"
+      loop_control:
+        label: "{{ item.name }}"
+
+    - name: Create Shared-Services organization
+      ansible.controller.organization:
+        controller_host: "{{ aap_hostname }}"
+        controller_oauthtoken: "{{ aap_token }}"
+        validate_certs: true
+        name: Shared-Services
+        state: present
+
+    - name: Create shared project for common playbooks
+      ansible.controller.project:
+        controller_host: "{{ aap_hostname }}"
+        controller_oauthtoken: "{{ aap_token }}"
+        validate_certs: true
+        name: "Common Automation"
+        organization: "Shared-Services"
+        scm_type: git
+        scm_url: "https://github.com/example/common-automation.git"
+        scm_branch: main
+        scm_update_on_launch: true
+        state: present

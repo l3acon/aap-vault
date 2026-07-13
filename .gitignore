@@ -3,3 +3,4 @@
 .vault_ca_pubkey
 .ec2_host_ip
 *.retry
+*.swp

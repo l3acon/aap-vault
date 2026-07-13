@@ -1,0 +1,149 @@
+---
+# Configure AAP 2.7 authenticator maps for Entra ID group-to-org/team mapping.
+#
+# Authenticator maps (new in AAP 2.7) replace the old JSON-based
+# TEAM_MAP/ORGANIZATION_MAP settings. They execute in order (lowest first)
+# and support Group and Attribute triggers from SAML/OIDC claims.
+#
+# Prerequisites:
+#   - Entra ID SAML or OIDC authenticator configured in AAP
+#   - Groups claim enabled in the Entra ID app registration
+#   - ansible.platform collection installed
+#
+# Note: The ansible.platform collection provides gateway-level
+# management including authenticator maps. This is separate from
+# ansible.controller which manages controller-level resources.
+
+- name: Configure Entra ID authenticator maps
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  vars:
+    aap_hostname: "{{ aap_hostname }}"
+    aap_token: "{{ aap_token }}"
+    authenticator_name: "Entra ID SAML"
+
+    # Entra ID group Object IDs mapped to AAP orgs/teams.
+    # In production, store these in a vars file or Vault.
+    group_mappings:
+      # BU-Finance mappings
+      - entra_group_id: "aaaabbbb-0001-0001-0001-ffffffffffff"
+        entra_group_name: "AAP-BU-Finance-Payments-Dev"
+        aap_org: BU-Finance
+        aap_team: Payments-Dev
+        order: 10
+
+      - entra_group_id: "aaaabbbb-0001-0002-0001-ffffffffffff"
+        entra_group_name: "AAP-BU-Finance-Risk-Ops"
+        aap_org: BU-Finance
+        aap_team: Risk-Ops
+        order: 11
+
+      - entra_group_id: "aaaabbbb-0001-0003-0001-ffffffffffff"
+        entra_group_name: "AAP-BU-Finance-Admin"
+        aap_org: BU-Finance
+        aap_team: Finance-Admin
+        order: 12
+
+      # BU-Engineering mappings
+      - entra_group_id: "aaaabbbb-0002-0001-0001-ffffffffffff"
+        entra_group_name: "AAP-BU-Engineering-Platform"
+        aap_org: BU-Engineering
+        aap_team: Platform
+        order: 20
+
+      - entra_group_id: "aaaabbbb-0002-0002-0001-ffffffffffff"
+        entra_group_name: "AAP-BU-Engineering-SRE"
+        aap_org: BU-Engineering
+        aap_team: SRE
+        order: 21
+
+      # Platform admin (superuser)
+      - entra_group_id: "aaaabbbb-9999-0001-0001-ffffffffffff"
+        entra_group_name: "AAP-Platform-Admin"
+        aap_org: ""
+        aap_team: ""
+        is_superuser: true
+        order: 100
+
+  tasks:
+    # Organization maps ensure users are placed in the right org
+    - name: Create organization authenticator maps
+      ansible.builtin.uri:
+        url: "{{ aap_hostname }}/api/gateway/v1/authenticator_maps/"
+        method: POST
+        headers:
+          Authorization: "Bearer {{ aap_token }}"
+          Content-Type: application/json
+        body_format: json
+        body:
+          name: "Org map - {{ item.entra_group_name }}"
+          authenticator: "{{ authenticator_name }}"
+          map_type: organization
+          triggers:
+            groups:
+              has_or:
+                - "{{ item.entra_group_id }}"
+          organization: "{{ item.aap_org }}"
+          order: "{{ item.order }}"
+          revoke: true
+        status_code: [200, 201]
+        validate_certs: true
+      loop: "{{ group_mappings | selectattr('aap_org') | list }}"
+      loop_control:
+        label: "{{ item.entra_group_name }} -> {{ item.aap_org }}"
+      when: item.aap_org | length > 0
+
+    # Team maps assign users to teams within their org
+    - name: Create team authenticator maps
+      ansible.builtin.uri:
+        url: "{{ aap_hostname }}/api/gateway/v1/authenticator_maps/"
+        method: POST
+        headers:
+          Authorization: "Bearer {{ aap_token }}"
+          Content-Type: application/json
+        body_format: json
+        body:
+          name: "Team map - {{ item.entra_group_name }}"
+          authenticator: "{{ authenticator_name }}"
+          map_type: team
+          triggers:
+            groups:
+              has_or:
+                - "{{ item.entra_group_id }}"
+          team: "{{ item.aap_team }}"
+          organization: "{{ item.aap_org }}"
+          order: "{{ item.order }}"
+          revoke: true
+        status_code: [200, 201]
+        validate_certs: true
+      loop: "{{ group_mappings | selectattr('aap_team') | list }}"
+      loop_control:
+        label: "{{ item.entra_group_name }} -> {{ item.aap_org }}/{{ item.aap_team }}"
+      when: item.aap_team | length > 0
+
+    # Superuser map for platform admins
+    - name: Create superuser authenticator map
+      ansible.builtin.uri:
+        url: "{{ aap_hostname }}/api/gateway/v1/authenticator_maps/"
+        method: POST
+        headers:
+          Authorization: "Bearer {{ aap_token }}"
+          Content-Type: application/json
+        body_format: json
+        body:
+          name: "Superuser map - {{ item.entra_group_name }}"
+          authenticator: "{{ authenticator_name }}"
+          map_type: is_superuser
+          triggers:
+            groups:
+              has_or:
+                - "{{ item.entra_group_id }}"
+          order: "{{ item.order }}"
+          revoke: true
+        status_code: [200, 201]
+        validate_certs: true
+      loop: "{{ group_mappings | selectattr('is_superuser', 'defined') | list }}"
+      loop_control:
+        label: "{{ item.entra_group_name }} -> superuser"

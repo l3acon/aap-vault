@@ -1,0 +1,58 @@
+aap_oidc_discovery_url = "https://aap.example.com/o"
+vault_url              = "https://vault.example.com:8200"
+
+business_units = [
+  {
+    name  = "bu-finance"
+    teams = ["team-payments", "team-risk"]
+    ssh_roles = [
+      {
+        name          = "automation"
+        default_user  = "deploy"
+        allowed_users = "*"
+        ttl           = "5m"
+        max_ttl       = "30m"
+      },
+      {
+        name          = "interactive"
+        default_user  = "admin"
+        allowed_users = "*"
+        ttl           = "30m"
+        max_ttl       = "4h"
+      }
+    ]
+  },
+  {
+    name  = "bu-engineering"
+    teams = ["team-platform", "team-app-dev", "team-sre"]
+    ssh_roles = [
+      {
+        name          = "automation"
+        default_user  = "deploy"
+        allowed_users = "*"
+        ttl           = "5m"
+        max_ttl       = "30m"
+      },
+      {
+        name          = "developer"
+        default_user  = "dev-user"
+        allowed_users = "*"
+        ttl           = "1h"
+        max_ttl       = "4h"
+      }
+    ]
+  },
+  {
+    name  = "bu-operations"
+    teams = ["team-noc", "team-cloud-ops"]
+    ssh_roles = [
+      {
+        name          = "automation"
+        default_user  = "deploy"
+        allowed_users = "*"
+        ttl           = "5m"
+        max_ttl       = "30m"
+      }
+    ]
+  }
+]

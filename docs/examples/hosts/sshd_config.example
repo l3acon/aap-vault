@@ -1,0 +1,26 @@
+# /etc/ssh/sshd_config additions for Vault SSH CA trust
+#
+# Each host trusts only the CA for its business unit.
+# Replace "bu-finance" with the appropriate BU name.
+#
+# The CA public key is retrieved from Vault:
+#   vault read -namespace=bu-finance -field=public_key ssh-ca/config/ca \
+#     > /etc/ssh/vault-bu-finance-ca.pub
+
+# Trust certificates signed by this BU's Vault CA
+TrustedUserCAKeys /etc/ssh/trusted-user-ca-keys.pem
+
+# Restrict which principals (usernames) each certificate can assume.
+# For user "deploy", the file /etc/ssh/auth_principals/deploy must
+# contain the allowed principal names (one per line).
+AuthorizedPrincipalsFile /etc/ssh/auth_principals/%u
+
+# Disable password authentication (cert-only access)
+PasswordAuthentication no
+ChallengeResponseAuthentication no
+
+# Disable root login (use principals for escalation)
+PermitRootLogin no
+
+# Log certificate details for audit
+LogLevel VERBOSE

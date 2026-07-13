@@ -1,0 +1,17 @@
+aap_url   = "https://aap.example.com"
+vault_url = "https://vault.example.com:8200"
+
+business_units = [
+  {
+    name  = "BU-Finance"
+    teams = ["Payments-Dev", "Risk-Ops", "Finance-Admin"]
+  },
+  {
+    name  = "BU-Engineering"
+    teams = ["Platform", "App-Dev", "SRE"]
+  },
+  {
+    name  = "BU-Operations"
+    teams = ["NOC", "Cloud-Ops"]
+  }
+]

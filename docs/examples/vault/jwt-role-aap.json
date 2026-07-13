@@ -1,0 +1,21 @@
+{
+  "role_type": "jwt",
+  "bound_audiences": ["https://vault.example.com:8200"],
+  "user_claim": "sub",
+  "bound_claims": {
+    "aap_controller_organization_name": [
+      "BU-Finance",
+      "BU-Engineering",
+      "BU-Operations"
+    ]
+  },
+  "claim_mappings": {
+    "aap_controller_organization_name": "org",
+    "aap_controller_job_template_name": "job_template",
+    "aap_controller_launched_by_name": "launched_by",
+    "aap_controller_launch_type": "launch_type"
+  },
+  "policies": ["aap-workload-policy"],
+  "token_ttl": 300,
+  "token_max_ttl": 600
+}
