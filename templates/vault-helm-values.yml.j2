@@ -1,0 +1,21 @@
+global:
+  openshift: true
+
+server:
+  dev:
+    enabled: true
+    devRootToken: "{{ vault_root_token }}"
+  standalone:
+    enabled: true
+  ha:
+    enabled: false
+  service:
+    type: ClusterIP
+  route:
+    enabled: false
+
+injector:
+  enabled: false
+
+ui:
+  enabled: true

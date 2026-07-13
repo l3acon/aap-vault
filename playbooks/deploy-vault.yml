@@ -1,0 +1,61 @@
+---
+- name: Deploy HashiCorp Vault on OpenShift
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  tasks:
+    - name: Create vault namespace
+      kubernetes.core.k8s:
+        api_version: v1
+        kind: Namespace
+        name: "{{ vault_namespace }}"
+        state: present
+
+    - name: Deploy Vault via Helm
+      kubernetes.core.helm:
+        name: "{{ vault_release_name }}"
+        chart_ref: "{{ vault_helm_chart }}"
+        release_namespace: "{{ vault_namespace }}"
+        create_namespace: true
+        values: "{{ lookup('template', '../templates/vault-helm-values.yml.j2') | from_yaml }}"
+        wait: true
+        timeout: 5m0s
+        state: present
+
+    - name: Create Vault Route for external access
+      kubernetes.core.k8s:
+        state: present
+        definition: "{{ lookup('template', '../templates/vault-route.yml.j2') | from_yaml }}"
+
+    - name: Wait for Vault pod to be ready
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: Pod
+        namespace: "{{ vault_namespace }}"
+        label_selectors:
+          - app.kubernetes.io/name=vault
+          - component=server
+        field_selectors:
+          - status.phase=Running
+      register: vault_pods
+      until: >-
+        vault_pods.resources | length > 0 and
+        vault_pods.resources[0].status.containerStatuses | default([]) | selectattr('ready', 'equalto', true) | list | length > 0
+      retries: 30
+      delay: 10
+
+    - name: Verify Vault is accessible via Route
+      ansible.builtin.uri:
+        url: "{{ vault_url }}/v1/sys/health"
+        method: GET
+        validate_certs: true
+        status_code: [200]
+      register: vault_health
+      retries: 12
+      delay: 5
+      until: vault_health is not failed
+
+    - name: Display Vault status
+      ansible.builtin.debug:
+        msg: "Vault is running at {{ vault_url }} (initialized={{ vault_health.json.initialized }}, sealed={{ vault_health.json.sealed }})"

@@ -1,0 +1,188 @@
+---
+- name: Configure Vault SSH CA and JWT auth for AAP OIDC
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  pre_tasks:
+    - name: Load credentials
+      ansible.builtin.include_vars:
+        file: "{{ item }}"
+      with_first_found:
+        - files: ["../.env", ".env"]
+          skip: true
+
+  tasks:
+    - name: Enable SSH secrets engine
+      ansible.builtin.uri:
+        url: "{{ vault_url }}/v1/sys/mounts/{{ ssh_mount_path }}"
+        method: POST
+        headers:
+          X-Vault-Token: "{{ vault_root_token }}"
+        body_format: json
+        body:
+          type: ssh
+        status_code: [200, 204]
+        validate_certs: true
+      register: ssh_engine
+      failed_when: >-
+        ssh_engine.status not in [200, 204] and
+        'path is already in use' not in (ssh_engine.json.errors | default([]) | join(' '))
+      changed_when: ssh_engine.status in [200, 204]
+
+    - name: Generate SSH CA signing keypair
+      ansible.builtin.uri:
+        url: "{{ vault_url }}/v1/{{ ssh_mount_path }}/config/ca"
+        method: POST
+        headers:
+          X-Vault-Token: "{{ vault_root_token }}"
+        body_format: json
+        body:
+          generate_signing_key: true
+        status_code: [200, 204]
+        validate_certs: true
+      register: ca_generate
+      failed_when: >-
+        ca_generate.status not in [200, 204] and
+        'keys are already configured' not in (ca_generate.json.errors | default([]) | join(' '))
+      changed_when: ca_generate.status in [200, 204]
+
+    - name: Retrieve SSH CA public key
+      ansible.builtin.uri:
+        url: "{{ vault_url }}/v1/{{ ssh_mount_path }}/config/ca"
+        method: GET
+        headers:
+          X-Vault-Token: "{{ vault_root_token }}"
+        status_code: [200]
+        validate_certs: true
+      register: ca_pubkey
+
+    - name: Save CA public key to disk
+      ansible.builtin.copy:
+        content: "{{ ca_pubkey.json.data.public_key }}"
+        dest: "{{ vault_ca_pubkey_file }}"
+        mode: "0644"
+
+    - name: Store CA public key as fact
+      ansible.builtin.set_fact:
+        vault_ca_public_key: "{{ ca_pubkey.json.data.public_key }}"
+
+    - name: Create SSH signing role
+      ansible.builtin.uri:
+        url: "{{ vault_url }}/v1/{{ ssh_mount_path }}/roles/{{ ssh_role_name }}"
+        method: POST
+        headers:
+          X-Vault-Token: "{{ vault_root_token }}"
+        body_format: json
+        body:
+          key_type: ca
+          allow_user_certificates: true
+          allowed_users: "*"
+          default_user: "{{ ssh_default_user }}"
+          default_extensions:
+            permit-pty: ""
+          ttl: "{{ ssh_cert_ttl }}"
+          max_ttl: "30m"
+          algorithm_signer: rsa-sha2-256
+        status_code: [200, 204]
+        validate_certs: true
+
+    - name: Create Vault policy for AAP SSH signing
+      ansible.builtin.uri:
+        url: "{{ vault_url }}/v1/sys/policies/acl/{{ vault_policy_name }}"
+        method: PUT
+        headers:
+          X-Vault-Token: "{{ vault_root_token }}"
+        body_format: json
+        body:
+          policy: "{{ lookup('template', '../templates/vault-policy.hcl.j2') }}"
+        status_code: [200, 204]
+        validate_certs: true
+
+    - name: Enable JWT auth method
+      ansible.builtin.uri:
+        url: "{{ vault_url }}/v1/sys/auth/{{ jwt_auth_path }}"
+        method: POST
+        headers:
+          X-Vault-Token: "{{ vault_root_token }}"
+        body_format: json
+        body:
+          type: jwt
+        status_code: [200, 204]
+        validate_certs: true
+      register: jwt_auth
+      failed_when: >-
+        jwt_auth.status not in [200, 204] and
+        'path is already in use' not in (jwt_auth.json.errors | default([]) | join(' '))
+      changed_when: jwt_auth.status in [200, 204]
+
+    - name: Get AAP OIDC discovery CA certificate
+      ansible.builtin.uri:
+        url: "{{ aap_hostname }}/o/.well-known/openid-configuration"
+        method: GET
+        validate_certs: true
+        status_code: [200]
+      register: oidc_discovery_check
+      ignore_errors: true
+
+    - name: Extract OCP ingress CA cert (if needed for Vault OIDC discovery)
+      when: oidc_discovery_check is failed
+      block:
+        - name: Get ingress CA secret
+          kubernetes.core.k8s_info:
+            api_version: v1
+            kind: Secret
+            name: router-ca
+            namespace: openshift-ingress-operator
+          register: ingress_ca_secret
+
+        - name: Set CA PEM fact
+          ansible.builtin.set_fact:
+            aap_oidc_ca_pem: "{{ ingress_ca_secret.resources[0].data['tls.crt'] | b64decode }}"
+
+    - name: Configure JWT auth backend with OIDC discovery
+      ansible.builtin.uri:
+        url: "{{ vault_url }}/v1/auth/{{ jwt_auth_path }}/config"
+        method: POST
+        headers:
+          X-Vault-Token: "{{ vault_root_token }}"
+        body_format: json
+        body: >-
+          {{
+            {'oidc_discovery_url': aap_hostname ~ '/o'}
+            | combine(
+                {'oidc_discovery_ca_pem': aap_oidc_ca_pem}
+                if aap_oidc_ca_pem is defined else {}
+              )
+          }}
+        status_code: [200, 204]
+        validate_certs: true
+
+    - name: Create JWT role for AAP
+      ansible.builtin.uri:
+        url: "{{ vault_url }}/v1/auth/{{ jwt_auth_path }}/role/{{ jwt_role_name }}"
+        method: POST
+        headers:
+          X-Vault-Token: "{{ vault_root_token }}"
+        body_format: json
+        body:
+          role_type: jwt
+          bound_audiences:
+            - "{{ vault_url }}"
+          user_claim: sub
+          policies:
+            - "{{ vault_policy_name }}"
+          token_ttl: 300
+        status_code: [200, 204]
+        validate_certs: true
+
+    - name: Display configuration summary
+      ansible.builtin.debug:
+        msg: |
+          Vault configured successfully:
+            SSH CA public key saved to {{ vault_ca_pubkey_file }}
+            SSH signing role: {{ ssh_role_name }} (TTL: {{ ssh_cert_ttl }})
+            JWT auth path: {{ jwt_auth_path }}
+            JWT role: {{ jwt_role_name }}
+            OIDC discovery URL: {{ aap_hostname }}/o
+            Bound audience: {{ vault_url }}

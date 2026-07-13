@@ -1,0 +1,56 @@
+---
+- name: Demo - Vault SSH Certificate Authentication
+  hosts: all
+  gather_facts: true
+
+  tasks:
+    - name: Display connection info
+      ansible.builtin.debug:
+        msg: |
+          Successfully connected to {{ inventory_hostname }} via Vault-signed SSH certificate!
+          Hostname: {{ ansible_hostname }}
+          OS: {{ ansible_distribution }} {{ ansible_distribution_version }}
+          Kernel: {{ ansible_kernel }}
+          Architecture: {{ ansible_architecture }}
+          Python: {{ ansible_python_version }}
+
+    - name: Show current user
+      ansible.builtin.command: whoami
+      register: whoami
+      changed_when: false
+
+    - name: Show SSH certificate details (if available)
+      ansible.builtin.shell: |
+        for f in /tmp/awx_*_cert.pub /tmp/ansible_*_cert.pub; do
+          if [ -f "$f" ]; then
+            ssh-keygen -L -f "$f" 2>/dev/null
+          fi
+        done
+        echo "Connected as: {{ whoami.stdout }}"
+      register: cert_info
+      changed_when: false
+      failed_when: false
+
+    - name: Display certificate info
+      ansible.builtin.debug:
+        var: cert_info.stdout_lines
+      when: cert_info.stdout | length > 0
+
+    - name: Verify host trusts Vault CA
+      ansible.builtin.command: grep TrustedUserCAKeys /etc/ssh/sshd_config
+      register: ca_config
+      changed_when: false
+      become: true
+
+    - name: Display Vault CA trust configuration
+      ansible.builtin.debug:
+        msg: "Host SSH CA trust: {{ ca_config.stdout }}"
+
+    - name: Uptime check
+      ansible.builtin.command: uptime
+      register: uptime
+      changed_when: false
+
+    - name: Display uptime
+      ansible.builtin.debug:
+        msg: "{{ uptime.stdout }}"

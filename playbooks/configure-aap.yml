@@ -1,0 +1,237 @@
+---
+- name: Configure AAP with Vault OIDC credentials and job templates
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  pre_tasks:
+    - name: Load credentials
+      ansible.builtin.include_vars:
+        file: "{{ item }}"
+      with_first_found:
+        - files: ["../.env", ".env"]
+          skip: true
+
+    - name: Load EC2 host IP
+      ansible.builtin.set_fact:
+        ec2_host_ip: "{{ lookup('file', ec2_host_ip_file) }}"
+
+    - name: Generate SSH keypair for Vault signing
+      community.crypto.openssh_keypair:
+        path: "{{ ssh_private_key_file }}"
+        type: ed25519
+        comment: "aap-vault-demo"
+        force: false
+      register: ssh_keypair
+
+    - name: Read SSH public key
+      ansible.builtin.set_fact:
+        vault_ssh_public_key: "{{ lookup('file', ssh_public_key_file) }}"
+
+  tasks:
+    # --- Organization ---
+    - name: Ensure Default organization exists
+      ansible.controller.organization:
+        controller_host: "{{ aap_hostname }}"
+        controller_username: "{{ aap_username }}"
+        controller_password: "{{ aap_password }}"
+        validate_certs: true
+        name: "{{ aap_organization }}"
+        state: present
+
+    # --- Project ---
+    - name: Create AAP project
+      ansible.controller.project:
+        controller_host: "{{ aap_hostname }}"
+        controller_username: "{{ aap_username }}"
+        controller_password: "{{ aap_password }}"
+        validate_certs: true
+        name: "{{ aap_project_name }}"
+        organization: "{{ aap_organization }}"
+        scm_type: git
+        scm_url: "https://github.com/l3acon/aap-vault.git"
+        scm_branch: master
+        scm_update_on_launch: true
+        state: present
+      register: project
+
+    - name: Sync project
+      ansible.controller.project_update:
+        controller_host: "{{ aap_hostname }}"
+        controller_username: "{{ aap_username }}"
+        controller_password: "{{ aap_password }}"
+        validate_certs: true
+        project: "{{ aap_project_name }}"
+        wait: true
+        timeout: 120
+
+    # --- Inventory ---
+    - name: Create demo inventory
+      ansible.controller.inventory:
+        controller_host: "{{ aap_hostname }}"
+        controller_username: "{{ aap_username }}"
+        controller_password: "{{ aap_password }}"
+        validate_certs: true
+        name: "{{ aap_inventory_name }}"
+        organization: "{{ aap_organization }}"
+        state: present
+
+    - name: Add EC2 host to inventory
+      ansible.controller.host:
+        controller_host: "{{ aap_hostname }}"
+        controller_username: "{{ aap_username }}"
+        controller_password: "{{ aap_password }}"
+        validate_certs: true
+        name: "{{ ec2_host_ip }}"
+        inventory: "{{ aap_inventory_name }}"
+        variables:
+          ansible_user: ec2-user
+        state: present
+
+    # --- Credentials ---
+    - name: Create Vault Signed SSH (OIDC) credential
+      ansible.controller.credential:
+        controller_host: "{{ aap_hostname }}"
+        controller_username: "{{ aap_username }}"
+        controller_password: "{{ aap_password }}"
+        validate_certs: true
+        name: "{{ aap_vault_credential_name }}"
+        organization: "{{ aap_organization }}"
+        credential_type: "HashiCorp Vault Signed SSH (OIDC)"
+        inputs:
+          url: "{{ vault_url }}"
+          default_auth_path: "{{ jwt_auth_path }}"
+          jwt_role: "{{ jwt_role_name }}"
+        state: present
+
+    - name: Create Machine credential with Vault SSH cert lookup
+      ansible.controller.credential:
+        controller_host: "{{ aap_hostname }}"
+        controller_username: "{{ aap_username }}"
+        controller_password: "{{ aap_password }}"
+        validate_certs: true
+        name: "{{ aap_machine_credential_name }}"
+        organization: "{{ aap_organization }}"
+        credential_type: "Machine"
+        inputs:
+          username: "{{ ssh_default_user }}"
+          ssh_key_data: "{{ lookup('file', ssh_private_key_file) }}"
+        state: present
+
+    - name: Link Vault OIDC credential to Machine credential
+      ansible.controller.credential_input_source:
+        controller_host: "{{ aap_hostname }}"
+        controller_username: "{{ aap_username }}"
+        controller_password: "{{ aap_password }}"
+        validate_certs: true
+        source_credential: "{{ aap_vault_credential_name }}"
+        target_credential: "{{ aap_machine_credential_name }}"
+        input_field_name: "ssh_public_key_data"
+        metadata:
+          public_key: "{{ vault_ssh_public_key }}"
+          secret_path: "{{ ssh_mount_path }}"
+          role: "{{ ssh_role_name }}"
+          valid_principals: "{{ ssh_default_user }}"
+        state: present
+
+    # --- OpenShift Credential (for deploy-vault job template) ---
+    - name: Get OCP service account token
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: Secret
+        namespace: "{{ vault_namespace }}"
+        label_selectors:
+          - app.kubernetes.io/name=vault
+      register: vault_secrets
+      failed_when: false
+
+    - name: Get current OCP API server URL
+      ansible.builtin.command: oc whoami --show-server
+      register: ocp_api_url
+      changed_when: false
+
+    - name: Get current OCP token
+      ansible.builtin.command: oc whoami -t
+      register: ocp_token
+      changed_when: false
+
+    - name: Create OpenShift credential
+      ansible.controller.credential:
+        controller_host: "{{ aap_hostname }}"
+        controller_username: "{{ aap_username }}"
+        controller_password: "{{ aap_password }}"
+        validate_certs: true
+        name: "{{ aap_ocp_credential_name }}"
+        organization: "{{ aap_organization }}"
+        credential_type: "OpenShift or Kubernetes API Bearer Token"
+        inputs:
+          host: "{{ ocp_api_url.stdout }}"
+          bearer_token: "{{ ocp_token.stdout }}"
+          verify_ssl: true
+        state: present
+
+    # --- Localhost Inventory (for deploy-vault template) ---
+    - name: Create localhost inventory
+      ansible.controller.inventory:
+        controller_host: "{{ aap_hostname }}"
+        controller_username: "{{ aap_username }}"
+        controller_password: "{{ aap_password }}"
+        validate_certs: true
+        name: "Localhost"
+        organization: "{{ aap_organization }}"
+        state: present
+
+    - name: Add localhost to inventory
+      ansible.controller.host:
+        controller_host: "{{ aap_hostname }}"
+        controller_username: "{{ aap_username }}"
+        controller_password: "{{ aap_password }}"
+        validate_certs: true
+        name: localhost
+        inventory: "Localhost"
+        variables:
+          ansible_connection: local
+          ansible_python_interpreter: "{{ '{{' }} ansible_playbook_python {{ '}}' }}"
+        state: present
+
+    # --- Job Templates ---
+    - name: Create Deploy Vault job template
+      ansible.controller.job_template:
+        controller_host: "{{ aap_hostname }}"
+        controller_username: "{{ aap_username }}"
+        controller_password: "{{ aap_password }}"
+        validate_certs: true
+        name: "{{ aap_deploy_template_name }}"
+        organization: "{{ aap_organization }}"
+        project: "{{ aap_project_name }}"
+        playbook: "playbooks/deploy-vault.yml"
+        inventory: "Localhost"
+        credentials:
+          - "{{ aap_ocp_credential_name }}"
+        state: present
+
+    - name: Create Demo SSH Certificate job template
+      ansible.controller.job_template:
+        controller_host: "{{ aap_hostname }}"
+        controller_username: "{{ aap_username }}"
+        controller_password: "{{ aap_password }}"
+        validate_certs: true
+        name: "{{ aap_demo_template_name }}"
+        organization: "{{ aap_organization }}"
+        project: "{{ aap_project_name }}"
+        playbook: "playbooks/demo.yml"
+        inventory: "{{ aap_inventory_name }}"
+        credentials:
+          - "{{ aap_machine_credential_name }}"
+        state: present
+
+    - name: Display AAP configuration summary
+      ansible.builtin.debug:
+        msg: |
+          AAP configured successfully:
+            Project: {{ aap_project_name }}
+            Vault OIDC Credential: {{ aap_vault_credential_name }}
+            Machine Credential: {{ aap_machine_credential_name }} (linked to Vault OIDC)
+            Inventory: {{ aap_inventory_name }} (host: {{ ec2_host_ip }})
+            Job Template 1: {{ aap_deploy_template_name }}
+            Job Template 2: {{ aap_demo_template_name }}

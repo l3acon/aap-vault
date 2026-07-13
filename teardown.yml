@@ -1,0 +1,133 @@
+---
+- name: Teardown AAP Vault OIDC Demo
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  pre_tasks:
+    - name: Load credentials
+      ansible.builtin.include_vars:
+        file: "{{ item }}"
+      with_first_found:
+        - files: ["../.env", ".env"]
+          skip: true
+
+  tasks:
+    # --- AAP Cleanup ---
+    - name: Remove AAP job templates
+      ansible.controller.job_template:
+        controller_host: "{{ aap_hostname }}"
+        controller_username: "{{ aap_username }}"
+        controller_password: "{{ aap_password }}"
+        validate_certs: true
+        name: "{{ item }}"
+        organization: "{{ aap_organization }}"
+        state: absent
+      loop:
+        - "{{ aap_deploy_template_name }}"
+        - "{{ aap_demo_template_name }}"
+      ignore_errors: true
+
+    - name: Remove AAP credentials
+      ansible.controller.credential:
+        controller_host: "{{ aap_hostname }}"
+        controller_username: "{{ aap_username }}"
+        controller_password: "{{ aap_password }}"
+        validate_certs: true
+        name: "{{ item }}"
+        organization: "{{ aap_organization }}"
+        credential_type: "Machine"
+        state: absent
+      loop:
+        - "{{ aap_machine_credential_name }}"
+        - "{{ aap_vault_credential_name }}"
+        - "{{ aap_ocp_credential_name }}"
+      ignore_errors: true
+
+    - name: Remove AAP inventories
+      ansible.controller.inventory:
+        controller_host: "{{ aap_hostname }}"
+        controller_username: "{{ aap_username }}"
+        controller_password: "{{ aap_password }}"
+        validate_certs: true
+        name: "{{ item }}"
+        organization: "{{ aap_organization }}"
+        state: absent
+      loop:
+        - "{{ aap_inventory_name }}"
+        - "Localhost"
+      ignore_errors: true
+
+    - name: Remove AAP project
+      ansible.controller.project:
+        controller_host: "{{ aap_hostname }}"
+        controller_username: "{{ aap_username }}"
+        controller_password: "{{ aap_password }}"
+        validate_certs: true
+        name: "{{ aap_project_name }}"
+        organization: "{{ aap_organization }}"
+        state: absent
+      ignore_errors: true
+
+    # --- AWS Cleanup ---
+    - name: Terminate EC2 instance
+      amazon.aws.ec2_instance:
+        region: "{{ aws_region }}"
+        access_key: "{{ aws_access_key_id }}"
+        secret_key: "{{ aws_secret_access_key }}"
+        filters:
+          "tag:Name": "{{ aws_instance_name }}"
+        state: terminated
+        wait: true
+      ignore_errors: true
+
+    - name: Remove EC2 key pair
+      amazon.aws.ec2_key:
+        name: "{{ aws_keypair_name }}"
+        region: "{{ aws_region }}"
+        access_key: "{{ aws_access_key_id }}"
+        secret_key: "{{ aws_secret_access_key }}"
+        state: absent
+      ignore_errors: true
+
+    - name: Remove security group
+      amazon.aws.ec2_security_group:
+        name: "{{ aws_security_group }}"
+        region: "{{ aws_region }}"
+        access_key: "{{ aws_access_key_id }}"
+        secret_key: "{{ aws_secret_access_key }}"
+        state: absent
+      ignore_errors: true
+
+    # --- Vault Cleanup ---
+    - name: Remove Vault deployment
+      kubernetes.core.helm:
+        name: "{{ vault_release_name }}"
+        release_namespace: "{{ vault_namespace }}"
+        state: absent
+        wait: true
+      ignore_errors: true
+
+    - name: Remove vault namespace
+      kubernetes.core.k8s:
+        api_version: v1
+        kind: Namespace
+        name: "{{ vault_namespace }}"
+        state: absent
+      ignore_errors: true
+
+    # --- Local Cleanup ---
+    - name: Remove local state files
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: absent
+      loop:
+        - "{{ vault_ca_pubkey_file }}"
+        - "{{ ec2_host_ip_file }}"
+        - "{{ ssh_private_key_file }}"
+        - "{{ ssh_public_key_file }}"
+        - "{{ provisioning_key_file }}"
+
+    - name: Teardown complete
+      ansible.builtin.debug:
+        msg: "All demo resources have been cleaned up."

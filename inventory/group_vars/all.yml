@@ -1,0 +1,50 @@
+---
+# OpenShift
+ocp_apps_domain: apps.rosa.rosa-tdnkz.jh18.p3.openshiftapps.com
+aap_namespace: aap-27
+
+# Vault
+vault_namespace: vault
+vault_release_name: vault
+vault_route_host: "vault-vault.{{ ocp_apps_domain }}"
+vault_url: "https://{{ vault_route_host }}"
+vault_root_token: root
+vault_helm_chart: openshift-helm-charts/vault
+
+# Vault SSH CA
+ssh_mount_path: ssh
+ssh_role_name: aap-ssh-role
+ssh_default_user: ec2-user
+ssh_cert_ttl: "5m"
+
+# Vault JWT/OIDC
+jwt_auth_path: jwt
+jwt_role_name: aap-role
+vault_policy_name: aap-ssh-policy
+
+# AWS
+aws_region: us-east-2
+aws_vpc_id: vpc-0cb97110749fcf10d
+aws_subnet_id: subnet-063a741b2bb665a92
+aws_keypair_name: aap-vault-demo
+aws_security_group: aap-vault-demo-sg
+aws_instance_name: aap-vault-demo-host
+aws_instance_type: t3.micro
+
+# AAP
+aap_project_name: "AAP Vault OIDC Demo"
+aap_organization: Default
+aap_vault_credential_name: "Vault SSH OIDC"
+aap_machine_credential_name: "Demo Machine - Vault SSH"
+aap_ocp_credential_name: "OpenShift API"
+aap_inventory_name: "Vault Demo Hosts"
+aap_deploy_template_name: "Deploy Vault on OCP"
+aap_demo_template_name: "Demo - Vault SSH Certificate"
+aap_ee_name: "Automation Hub Default execution environment"
+
+# Shared data file paths (for inter-playbook data passing)
+vault_ca_pubkey_file: "{{ inventory_dir }}/../.vault_ca_pubkey"
+ec2_host_ip_file: "{{ inventory_dir }}/../.ec2_host_ip"
+ssh_private_key_file: "{{ inventory_dir }}/../.ssh/vault_key"
+ssh_public_key_file: "{{ inventory_dir }}/../.ssh/vault_key.pub"
+provisioning_key_file: "{{ inventory_dir }}/../.ssh/provisioning_key.pem"

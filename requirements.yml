@@ -1,0 +1,6 @@
+---
+collections:
+  - name: ansible.controller
+  - name: kubernetes.core
+  - name: amazon.aws
+  - name: community.hashi_vault

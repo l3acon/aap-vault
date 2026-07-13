@@ -1,0 +1,7 @@
+path "{{ ssh_mount_path }}/sign/{{ ssh_role_name }}" {
+  capabilities = ["create", "update"]
+}
+
+path "{{ ssh_mount_path }}/config/ca" {
+  capabilities = ["read"]
+}

@@ -1,0 +1,80 @@
+---
+- name: Enable OIDC workload identity on AAP 2.7
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  pre_tasks:
+    - name: Load credentials
+      ansible.builtin.include_vars:
+        file: "{{ item }}"
+      with_first_found:
+        - files: ["../.env", ".env"]
+          skip: true
+
+  tasks:
+    - name: Check current AAP feature flags
+      kubernetes.core.k8s_info:
+        api_version: aap.ansible.com/v1alpha1
+        kind: AnsibleAutomationPlatform
+        name: aap
+        namespace: "{{ aap_namespace }}"
+      register: aap_cr
+
+    - name: Current feature flags
+      ansible.builtin.debug:
+        msg: "{{ aap_cr.resources[0].spec.feature_flags | default({}) }}"
+
+    - name: Enable OIDC workload identity feature flag
+      kubernetes.core.k8s:
+        api_version: aap.ansible.com/v1alpha1
+        kind: AnsibleAutomationPlatform
+        name: aap
+        namespace: "{{ aap_namespace }}"
+        state: present
+        definition:
+          spec:
+            feature_flags:
+              FEATURE_OIDC_WORKLOAD_IDENTITY_ENABLED: true
+              FEATURE_DASHBOARD_COLLECTION_ENABLED: true
+      register: patch_result
+
+    - name: Wait for controller pods to restart
+      when: patch_result.changed
+      block:
+        - name: Pause to allow operator to begin reconciliation
+          ansible.builtin.pause:
+            seconds: 30
+
+        - name: Wait for controller web pod to be ready
+          kubernetes.core.k8s_info:
+            api_version: v1
+            kind: Pod
+            namespace: "{{ aap_namespace }}"
+            label_selectors:
+              - app.kubernetes.io/component=automationcontroller
+              - app.kubernetes.io/name=aap-controller-web
+          register: controller_pods
+          until: >-
+            controller_pods.resources | length > 0 and
+            controller_pods.resources | selectattr('status.phase', 'equalto', 'Running') | list | length > 0
+          retries: 60
+          delay: 10
+
+        - name: Verify AAP gateway is accessible
+          ansible.builtin.uri:
+            url: "{{ aap_hostname }}/api/gateway/v1/ping/"
+            method: GET
+            validate_certs: true
+            status_code: [200]
+            force_basic_auth: true
+            url_username: "{{ aap_username }}"
+            url_password: "{{ aap_password }}"
+          retries: 30
+          delay: 10
+          register: aap_ping
+          until: aap_ping is not failed
+
+    - name: Confirm OIDC is enabled
+      ansible.builtin.debug:
+        msg: "OIDC workload identity feature flag is now enabled on AAP"
